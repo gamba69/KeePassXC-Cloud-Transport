@@ -65,6 +65,16 @@ try {
         throw 'Release workflows lack required manual controls or isolation'
     }
     Write-Host '[PASS] SourceAudit / release workflows and CI permission boundaries'
+    # Guard the draft lookup and pinned workflow tooling against regression.
+    $guard = Get-Content -LiteralPath 'scripts/release-check.ps1' -Raw -Encoding UTF8
+    if (-not $guard.Contains('releases?per_page=100') -or
+        -not $guard.Contains('SourceRoot') -or
+        -not $assets.Contains('path: .release-tools') -or
+        -not $assets.Contains('contents: write') -or
+        -not $assets.Contains('SourceRoot $env:GITHUB_WORKSPACE')) {
+        throw 'Draft validation must enumerate releases with write access and pin tooling separately from the tag'
+    }
+    Write-Host '[PASS] SourceAudit / draft release lookup and pinned validator'
     foreach ($source in Get-ChildItem src -Filter '*.cs' -Recurse -File) {
         $body = Get-Content -LiteralPath $source.FullName -Raw
         if ($body -match '\bKeyPassXCCloudSync\b|\bAvalonia\b|\bWindowsCredentialStore\b|\bPlatformServices\.Current\b') {

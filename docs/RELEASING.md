@@ -10,7 +10,7 @@ commit and package version. Do not re-use a released version.
 | File | Trigger | Permission | Result |
 | --- | --- | --- | --- |
 | `.github/workflows/ci.yml` | Branch push, PR, or manual | `contents: read` | Full build/test/AOT gate; unpublished CI artifact |
-| `.github/workflows/release-assets.yml` | Manual `workflow_dispatch` | `contents: read` build, `contents: write` attachment | Rebuilds and attaches verified files to a **pre-existing Draft Release** |
+| `.github/workflows/release-assets.yml` | Manual `workflow_dispatch` | `contents: write` draft lookup/attachment; read-only build | Rebuilds and attaches verified files to a **pre-existing Draft Release** |
 | `.github/workflows/publish-nuget.yml` | Separate manual `workflow_dispatch` | `contents: read` and `id-token: write` | Re-verifies an **immutable published** GitHub Release and transfers its exact package to NuGet.org |
 
 Exactly two files are attached to each GitHub Release:
@@ -40,8 +40,10 @@ modify existing assets or skip failing tests. They never use `--clobber` or
    address. This is not a secret. Do not add a NuGet API key to repository
    secrets.
 5. Review **Actions > General > Workflow permissions**. The CI workflow only
-   reads. Release asset upload requests `contents: write` for that job; the
-   NuGet job requests `id-token: write` but not repository write access.
+   reads. Draft release validation and asset attachment require `contents: write`
+   to retrieve private Draft Release metadata and upload assets. The build job
+   remains read-only; the NuGet job requests `id-token: write` but not
+   repository write access.
 
 ## One-time NuGet.org Trusted Publishing policy
 
@@ -157,3 +159,23 @@ The scripts that read GitHub Release metadata use `gh` and a GitHub Actions
 repository release process has no stored signing key. GitHub issues immutable
 release attestations, and NuGet.org validates an OIDC identity at package
 publication. These mechanisms serve different purposes.
+
+## Draft Release visibility and workflow-tooling fixes
+
+GitHub's `GET /releases/tags/{tag}` endpoint returns published releases and can
+return HTTP 404 for a valid Draft Release. The release-assets workflow validates
+drafts using the authenticated paginated `GET /releases` listing with a job
+scoped `contents: write` token. Do **not** publish a draft merely to make the
+API return it. An existing Draft Release with the requested tag must remain
+unpublished, non-prerelease and have no assets before attachment.
+
+Release verification scripts are checked out from the exact main commit that
+dispatched the workflow (`github.sha`), while the library sources, tests and
+NuGet package are checked out from the requested immutable tag. This allows the
+corrected 1.0.2 workflow to complete a pre-existing 1.0.1 Draft Release without
+rewriting the 1.0.1 tag or its source. The resulting package version is still
+read from the tagged commit and must equal the requested release version.
+
+An HTTP 404 must not be interpreted as proof that an author-created draft does
+not exist. Check the authorization used by the workflow, not an unauthenticated
+public API request.

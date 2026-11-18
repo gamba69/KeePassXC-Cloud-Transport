@@ -15,6 +15,9 @@ jobs:
   preflight:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Draft releases require a token with push-level permissions for listing.
+    permissions:
+      contents: write
     outputs:
       tag_commit: ${{ steps.validate.outputs.tag_commit }}
       release_id: ${{ steps.validate.outputs.release_id }}
@@ -24,13 +27,20 @@ jobs:
           ref: ${{ inputs.version }}
           fetch-depth: 0
           persist-credentials: false
+      # Pin the corrected release validator to the dispatch commit on main,
+      # not the immutable release tag (which may predate a tooling fix).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
       - id: validate
         name: Validate tag, version, draft identity and empty assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         shell: pwsh
-        run: ./scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft
+        run: ./.release-tools/scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft -SourceRoot $env:GITHUB_WORKSPACE
 
   build:
     needs: preflight
@@ -71,6 +81,12 @@ jobs:
           ref: ${{ needs.preflight.outputs.tag_commit }}
           fetch-depth: 0
           persist-credentials: false
+      # Same pinned validator version as preflight; package sources stay at the tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: release-assets-${{ inputs.version }}-${{ github.run_id }}
@@ -80,7 +96,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         shell: pwsh
-        run: ./scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft -ExpectedReleaseId '${{ needs.preflight.outputs.release_id }}' -ExpectedTagCommit '${{ needs.preflight.outputs.tag_commit }}'
+        run: ./.release-tools/scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft -ExpectedReleaseId '${{ needs.preflight.outputs.release_id }}' -ExpectedTagCommit '${{ needs.preflight.outputs.tag_commit }}' -SourceRoot $env:GITHUB_WORKSPACE
       - name: Verify downloaded build artifact
         env:
           RELEASE_VERSION: ${{ inputs.version }}

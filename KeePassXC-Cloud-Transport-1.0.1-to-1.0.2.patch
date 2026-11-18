@@ -1,0 +1,231 @@
+diff --git a/.github/workflows/release-assets.yml b/.github/workflows/release-assets.yml
+index 5ef9ef3..55081ce 100644
+--- a/.github/workflows/release-assets.yml
++++ b/.github/workflows/release-assets.yml
+@@ -15,6 +15,9 @@ jobs:
+   preflight:
+     if: github.ref == 'refs/heads/main'
+     runs-on: ubuntu-latest
++    # Draft releases require a token with push-level permissions for listing.
++    permissions:
++      contents: write
+     outputs:
+       tag_commit: ${{ steps.validate.outputs.tag_commit }}
+       release_id: ${{ steps.validate.outputs.release_id }}
+@@ -24,13 +27,20 @@ jobs:
+           ref: ${{ inputs.version }}
+           fetch-depth: 0
+           persist-credentials: false
++      # Pin the corrected release validator to the dispatch commit on main,
++      # not the immutable release tag (which may predate a tooling fix).
++      - uses: actions/checkout@v4
++        with:
++          ref: ${{ github.sha }}
++          path: .release-tools
++          persist-credentials: false
+       - id: validate
+         name: Validate tag, version, draft identity and empty assets
+         env:
+           GH_TOKEN: ${{ github.token }}
+           RELEASE_VERSION: ${{ inputs.version }}
+         shell: pwsh
+-        run: ./scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft
++        run: ./.release-tools/scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft -SourceRoot $env:GITHUB_WORKSPACE
+ 
+   build:
+     needs: preflight
+@@ -71,6 +81,12 @@ jobs:
+           ref: ${{ needs.preflight.outputs.tag_commit }}
+           fetch-depth: 0
+           persist-credentials: false
++      # Same pinned validator version as preflight; package sources stay at the tag.
++      - uses: actions/checkout@v4
++        with:
++          ref: ${{ github.sha }}
++          path: .release-tools
++          persist-credentials: false
+       - uses: actions/download-artifact@v4
+         with:
+           name: release-assets-${{ inputs.version }}-${{ github.run_id }}
+@@ -80,7 +96,7 @@ jobs:
+           GH_TOKEN: ${{ github.token }}
+           RELEASE_VERSION: ${{ inputs.version }}
+         shell: pwsh
+-        run: ./scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft -ExpectedReleaseId '${{ needs.preflight.outputs.release_id }}' -ExpectedTagCommit '${{ needs.preflight.outputs.tag_commit }}'
++        run: ./.release-tools/scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft -ExpectedReleaseId '${{ needs.preflight.outputs.release_id }}' -ExpectedTagCommit '${{ needs.preflight.outputs.tag_commit }}' -SourceRoot $env:GITHUB_WORKSPACE
+       - name: Verify downloaded build artifact
+         env:
+           RELEASE_VERSION: ${{ inputs.version }}
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index ee9f017..0d2e91f 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## [1.0.2] - 2026-11-18
++
++- Fix manual Draft Release validation: GitHub's by-tag REST endpoint only resolves published releases; enumerate authenticated releases for drafts.
++- Give the read-only Draft preflight procedure a release-capable token, without granting publishing permissions to ordinary CI.
++- Pin release validation tooling to the workflow-dispatch commit, independently from the immutable source tag. This permits completing the existing 1.0.1 Draft Release after deploying the 1.0.2 workflow fix.
++- Retain source tag/commit checks, release identity checks, required empty assets, checksum verification and manual publication boundaries.
++
+ ## [1.0.1] - 2026-11-18
+ 
+ - Add separate manual GitHub Release asset preparation and NuGet.org publishing workflows.
+diff --git a/Directory.Build.props b/Directory.Build.props
+index 56c0c92..dadf542 100644
+--- a/Directory.Build.props
++++ b/Directory.Build.props
+@@ -1,6 +1,6 @@
+ <Project>
+   <PropertyGroup>
+-    <Version>1.0.1</Version>
++    <Version>1.0.2</Version>
+     <AssemblyVersion>$(Version).0</AssemblyVersion>
+     <FileVersion>$(Version).0</FileVersion>
+     <InformationalVersion>$(Version)</InformationalVersion>
+diff --git a/README.md b/README.md
+index cb76732..81c8191 100644
+--- a/README.md
++++ b/README.md
+@@ -85,7 +85,7 @@ build.bat -NoPause
+ build.bat -NoPause -ValidateOnly
+ ```
+ 
+-The default build performs mandatory source validation, .NET restore, compilation, named tests, Windows NativeAOT smoke and `dotnet pack`. Output: `dist/KeePassXC.CloudTransport.1.0.1.nupkg` and a matching SHA-256 sidecar. This is not automatically uploaded to nuget.org. The `-SkipAot` developer switch is available for intermediate local experiments; such a build is **not** qualified for release.
++The default build performs mandatory source validation, .NET restore, compilation, named tests, Windows NativeAOT smoke and `dotnet pack`. Output: `dist/KeePassXC.CloudTransport.1.0.2.nupkg` and a matching SHA-256 sidecar. This is not automatically uploaded to nuget.org. The `-SkipAot` developer switch is available for intermediate local experiments; such a build is **not** qualified for release.
+ 
+ The source package requires **no third-party NuGet dependencies**. GitHub Actions runs the same build on `windows-latest`, and saves an unpublished package for each successful CI run. Neither pushes nor Git tags publish a release automatically. See [Releasing](docs/RELEASING.md) for the separate manual GitHub Release and NuGet.org Trusted Publishing workflows (no stored NuGet API key).
+ 
+diff --git a/docs/RELEASING.md b/docs/RELEASING.md
+index 2aee545..37f8e87 100644
+--- a/docs/RELEASING.md
++++ b/docs/RELEASING.md
+@@ -10,7 +10,7 @@ commit and package version. Do not re-use a released version.
+ | File | Trigger | Permission | Result |
+ | --- | --- | --- | --- |
+ | `.github/workflows/ci.yml` | Branch push, PR, or manual | `contents: read` | Full build/test/AOT gate; unpublished CI artifact |
+-| `.github/workflows/release-assets.yml` | Manual `workflow_dispatch` | `contents: read` build, `contents: write` attachment | Rebuilds and attaches verified files to a **pre-existing Draft Release** |
++| `.github/workflows/release-assets.yml` | Manual `workflow_dispatch` | `contents: write` draft lookup/attachment; read-only build | Rebuilds and attaches verified files to a **pre-existing Draft Release** |
+ | `.github/workflows/publish-nuget.yml` | Separate manual `workflow_dispatch` | `contents: read` and `id-token: write` | Re-verifies an **immutable published** GitHub Release and transfers its exact package to NuGet.org |
+ 
+ Exactly two files are attached to each GitHub Release:
+@@ -40,8 +40,10 @@ modify existing assets or skip failing tests. They never use `--clobber` or
+    address. This is not a secret. Do not add a NuGet API key to repository
+    secrets.
+ 5. Review **Actions > General > Workflow permissions**. The CI workflow only
+-   reads. Release asset upload requests `contents: write` for that job; the
+-   NuGet job requests `id-token: write` but not repository write access.
++   reads. Draft release validation and asset attachment require `contents: write`
++   to retrieve private Draft Release metadata and upload assets. The build job
++   remains read-only; the NuGet job requests `id-token: write` but not
++   repository write access.
+ 
+ ## One-time NuGet.org Trusted Publishing policy
+ 
+@@ -157,3 +159,23 @@ The scripts that read GitHub Release metadata use `gh` and a GitHub Actions
+ repository release process has no stored signing key. GitHub issues immutable
+ release attestations, and NuGet.org validates an OIDC identity at package
+ publication. These mechanisms serve different purposes.
++
++## Draft Release visibility and workflow-tooling fixes
++
++GitHub's `GET /releases/tags/{tag}` endpoint returns published releases and can
++return HTTP 404 for a valid Draft Release. The release-assets workflow validates
++drafts using the authenticated paginated `GET /releases` listing with a job
++scoped `contents: write` token. Do **not** publish a draft merely to make the
++API return it. An existing Draft Release with the requested tag must remain
++unpublished, non-prerelease and have no assets before attachment.
++
++Release verification scripts are checked out from the exact main commit that
++dispatched the workflow (`github.sha`), while the library sources, tests and
++NuGet package are checked out from the requested immutable tag. This allows the
++corrected 1.0.2 workflow to complete a pre-existing 1.0.1 Draft Release without
++rewriting the 1.0.1 tag or its source. The resulting package version is still
++read from the tagged commit and must equal the requested release version.
++
++An HTTP 404 must not be interpreted as proof that an author-created draft does
++not exist. Check the authorization used by the workflow, not an unauthenticated
++public API request.
+diff --git a/scripts/build.ps1 b/scripts/build.ps1
+index 25df207..7a74eba 100644
+--- a/scripts/build.ps1
++++ b/scripts/build.ps1
+@@ -65,6 +65,16 @@ try {
+         throw 'Release workflows lack required manual controls or isolation'
+     }
+     Write-Host '[PASS] SourceAudit / release workflows and CI permission boundaries'
++    # Guard the draft lookup and pinned workflow tooling against regression.
++    $guard = Get-Content -LiteralPath 'scripts/release-check.ps1' -Raw -Encoding UTF8
++    if (-not $guard.Contains('releases?per_page=100') -or
++        -not $guard.Contains('SourceRoot') -or
++        -not $assets.Contains('path: .release-tools') -or
++        -not $assets.Contains('contents: write') -or
++        -not $assets.Contains('SourceRoot $env:GITHUB_WORKSPACE')) {
++        throw 'Draft validation must enumerate releases with write access and pin tooling separately from the tag'
++    }
++    Write-Host '[PASS] SourceAudit / draft release lookup and pinned validator'
+     foreach ($source in Get-ChildItem src -Filter '*.cs' -Recurse -File) {
+         $body = Get-Content -LiteralPath $source.FullName -Raw
+         if ($body -match '\bKeyPassXCCloudSync\b|\bAvalonia\b|\bWindowsCredentialStore\b|\bPlatformServices\.Current\b') {
+diff --git a/scripts/release-check.ps1 b/scripts/release-check.ps1
+index a8ac3ae..67071aa 100644
+--- a/scripts/release-check.ps1
++++ b/scripts/release-check.ps1
+@@ -6,7 +6,8 @@ param(
+     [Parameter(Mandatory=$true)][ValidateSet('Draft','Published')][string]$Phase,
+     [string]$Repository = 'gamba69/KeePassXC-Cloud-Transport',
+     [string]$ExpectedReleaseId = '',
+-    [string]$ExpectedTagCommit = ''
++    [string]$ExpectedTagCommit = '',
++    [string]$SourceRoot = ''
+ )
+ Set-StrictMode -Version Latest
+ $ErrorActionPreference = 'Stop'
+@@ -32,7 +33,13 @@ try {
+         Assert-Release ($env:GITHUB_REPOSITORY -ceq $Repository) 'Workflow belongs to expected repository'
+         Assert-Release ($env:GITHUB_REF -ceq 'refs/heads/main') 'Release dispatched from main branch'
+     }
+-    $root = Split-Path -Parent $PSScriptRoot
++    # Release tooling may come from the pinned workflow commit, while sources
++    # are checked out from an older immutable release tag.
++    $root = if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
++        Split-Path -Parent $PSScriptRoot
++    } else {
++        (Resolve-Path -LiteralPath $SourceRoot).ProviderPath
++    }
+     Push-Location $root
+     try {
+         [xml]$props = Get-Content -LiteralPath 'Directory.Build.props' -Raw -Encoding UTF8
+@@ -49,7 +56,29 @@ try {
+         & git merge-base --is-ancestor $head 'origin/main'
+         Assert-Release ($LASTEXITCODE -eq 0) 'Tag commit is contained in main history'
+ 
+-        $release = Gh-Read @('api',"repos/$Repository/releases/tags/$Version") | ConvertFrom-Json
++        if ($Phase -eq 'Draft') {
++            # The by-tag REST endpoint resolves PUBLISHED releases only. It
++            # returns HTTP 404 for an existing Draft Release. Enumerate draft
++            # releases using a token with repository write permission instead.
++            $json = Gh-Read @('api','--paginate','--slurp',"repos/$Repository/releases?per_page=100")
++            $pages = ConvertFrom-Json -InputObject $json
++            $matching = @()
++            foreach ($page in $pages) {
++                foreach ($entry in @($page)) {
++                    if ($null -ne $entry -and [string]$entry.tag_name -ceq $Version) {
++                        $matching += $entry
++                    }
++                }
++            }
++            if ($matching.Count -ne 1) {
++                throw "Expected one Draft Release with tag $Version in the authenticated releases list; found $($matching.Count). Verify contents:write permission and the existing Draft Release."
++            }
++            $release = $matching[0]
++        }
++        else {
++            # The by-tag endpoint is suitable for an already published release.
++            $release = Gh-Read @('api',"repos/$Repository/releases/tags/$Version") | ConvertFrom-Json
++        }
+         Assert-Release ([string]$release.tag_name -ceq $Version) 'Release tag matches source version'
+         Assert-Release (-not [bool]$release.prerelease) 'Release is not marked as prerelease'
+         if ($ExpectedReleaseId) {

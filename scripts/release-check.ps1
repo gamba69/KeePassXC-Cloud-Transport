@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory=$true)][ValidateSet('Draft','Published')][string]$Phase,
     [string]$Repository = 'gamba69/KeePassXC-Cloud-Transport',
     [string]$ExpectedReleaseId = '',
-    [string]$ExpectedTagCommit = ''
+    [string]$ExpectedTagCommit = '',
+    [string]$SourceRoot = ''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -32,7 +33,13 @@ try {
         Assert-Release ($env:GITHUB_REPOSITORY -ceq $Repository) 'Workflow belongs to expected repository'
         Assert-Release ($env:GITHUB_REF -ceq 'refs/heads/main') 'Release dispatched from main branch'
     }
-    $root = Split-Path -Parent $PSScriptRoot
+    # Release tooling may come from the pinned workflow commit, while sources
+    # are checked out from an older immutable release tag.
+    $root = if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+        Split-Path -Parent $PSScriptRoot
+    } else {
+        (Resolve-Path -LiteralPath $SourceRoot).ProviderPath
+    }
     Push-Location $root
     try {
         [xml]$props = Get-Content -LiteralPath 'Directory.Build.props' -Raw -Encoding UTF8
@@ -49,7 +56,29 @@ try {
         & git merge-base --is-ancestor $head 'origin/main'
         Assert-Release ($LASTEXITCODE -eq 0) 'Tag commit is contained in main history'
 
-        $release = Gh-Read @('api',"repos/$Repository/releases/tags/$Version") | ConvertFrom-Json
+        if ($Phase -eq 'Draft') {
+            # The by-tag REST endpoint resolves PUBLISHED releases only. It
+            # returns HTTP 404 for an existing Draft Release. Enumerate draft
+            # releases using a token with repository write permission instead.
+            $json = Gh-Read @('api','--paginate','--slurp',"repos/$Repository/releases?per_page=100")
+            $pages = ConvertFrom-Json -InputObject $json
+            $matching = @()
+            foreach ($page in $pages) {
+                foreach ($entry in @($page)) {
+                    if ($null -ne $entry -and [string]$entry.tag_name -ceq $Version) {
+                        $matching += $entry
+                    }
+                }
+            }
+            if ($matching.Count -ne 1) {
+                throw "Expected one Draft Release with tag $Version in the authenticated releases list; found $($matching.Count). Verify contents:write permission and the existing Draft Release."
+            }
+            $release = $matching[0]
+        }
+        else {
+            # The by-tag endpoint is suitable for an already published release.
+            $release = Gh-Read @('api',"repos/$Repository/releases/tags/$Version") | ConvertFrom-Json
+        }
         Assert-Release ([string]$release.tag_name -ceq $Version) 'Release tag matches source version'
         Assert-Release (-not [bool]$release.prerelease) 'Release is not marked as prerelease'
         if ($ExpectedReleaseId) {

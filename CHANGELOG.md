@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2] - 2026-11-18
+
+- Fix manual Draft Release validation: GitHub's by-tag REST endpoint only resolves published releases; enumerate authenticated releases for drafts.
+- Give the read-only Draft preflight procedure a release-capable token, without granting publishing permissions to ordinary CI.
+- Pin release validation tooling to the workflow-dispatch commit, independently from the immutable source tag. This permits completing the existing 1.0.1 Draft Release after deploying the 1.0.2 workflow fix.
+- Retain source tag/commit checks, release identity checks, required empty assets, checksum verification and manual publication boundaries.
+
 ## [1.0.1] - 2026-11-18
 
 - Add separate manual GitHub Release asset preparation and NuGet.org publishing workflows.

@@ -85,7 +85,7 @@ build.bat -NoPause
 build.bat -NoPause -ValidateOnly
 ```
 
-The default build performs mandatory source validation, .NET restore, compilation, named tests, Windows NativeAOT smoke and `dotnet pack`. Output: `dist/KeePassXC.CloudTransport.1.0.1.nupkg` and a matching SHA-256 sidecar. This is not automatically uploaded to nuget.org. The `-SkipAot` developer switch is available for intermediate local experiments; such a build is **not** qualified for release.
+The default build performs mandatory source validation, .NET restore, compilation, named tests, Windows NativeAOT smoke and `dotnet pack`. Output: `dist/KeePassXC.CloudTransport.1.0.2.nupkg` and a matching SHA-256 sidecar. This is not automatically uploaded to nuget.org. The `-SkipAot` developer switch is available for intermediate local experiments; such a build is **not** qualified for release.
 
 The source package requires **no third-party NuGet dependencies**. GitHub Actions runs the same build on `windows-latest`, and saves an unpublished package for each successful CI run. Neither pushes nor Git tags publish a release automatically. See [Releasing](docs/RELEASING.md) for the separate manual GitHub Release and NuGet.org Trusted Publishing workflows (no stored NuGet API key).
 
