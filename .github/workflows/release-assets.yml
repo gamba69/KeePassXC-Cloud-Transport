@@ -1,0 +1,111 @@
+name: Release / attach verified NuGet assets
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Existing Git tag and Draft Release (e.g., 1.0.1, no v prefix)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-assets-${{ inputs.version }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      tag_commit: ${{ steps.validate.outputs.tag_commit }}
+      release_id: ${{ steps.validate.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: validate
+        name: Validate tag, version, draft identity and empty assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft
+
+  build:
+    needs: preflight
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.tag_commit }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build and run the complete mandatory test gate
+        shell: cmd
+        run: build.bat -NoPause
+      - name: Check the package to be released
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/verify-package.ps1 -Version $env:RELEASE_VERSION -Directory dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ inputs.version }}-${{ github.run_id }}
+          path: |
+            dist/KeePassXC.CloudTransport.${{ inputs.version }}.nupkg
+            dist/KeePassXC.CloudTransport.${{ inputs.version }}.nupkg.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  attach:
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.tag_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets-${{ inputs.version }}-${{ github.run_id }}
+          path: dist
+      - name: Recheck tag and draft identity immediately before uploading
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Draft -ExpectedReleaseId '${{ needs.preflight.outputs.release_id }}' -ExpectedTagCommit '${{ needs.preflight.outputs.tag_commit }}'
+      - name: Verify downloaded build artifact
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/verify-package.ps1 -Version $env:RELEASE_VERSION -Directory dist
+      - name: Attach assets (never overwrite a pre-existing asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="dist/KeePassXC.CloudTransport.${RELEASE_VERSION}.nupkg"
+          gh release upload "$RELEASE_VERSION" "$pkg" "${pkg}.sha256" --repo "$GITHUB_REPOSITORY"
+          mkdir -p verified
+          gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --dir verified
+      - name: Verify assets downloaded back from the Draft Release
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/verify-package.ps1 -Version $env:RELEASE_VERSION -Directory verified
+      - name: Release is ready for manual publication
+        shell: bash
+        run: |
+          echo "[PASS] Release assets attached and independently checked."
+          echo "[INFO] Publish the Draft Release manually on GitHub after review."
+          echo "[INFO] Enable immutable releases in repository settings before publishing."
+          echo "[INFO] NuGet.org publishing is a separate manual workflow."

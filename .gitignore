@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+.vs/
+.vscode/
+dist/
+publish/
+TestResults/
+*.user
+*.suo
+*.pfx
+*.p12
+*.kdbx
+*.kdbx.key
+*.token
+*.secrets.json

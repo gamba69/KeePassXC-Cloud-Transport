@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>KeePassXC.CloudTransport</PackageId>
+    <Title>KeePassXC Cloud Transport</Title>
+    <AssemblyName>KeePassXC.CloudTransport</AssemblyName>
+    <RootNamespace>KeePassXC.CloudTransport</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsPackable>true</IsPackable>
+    <Description>Unofficial independent library. Provider-neutral .NET cloud object transports for Google Drive, Proton Drive CLI, S3/R2 and HTTPS WebDAV.</Description>
+    <Authors>gamba69</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>keepassxc;cloud;transport;google-drive;proton-drive;webdav;s3;r2;aot</PackageTags>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/gamba69/KeePassXC-Cloud-Transport</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/gamba69/KeePassXC-Cloud-Transport</RepositoryUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

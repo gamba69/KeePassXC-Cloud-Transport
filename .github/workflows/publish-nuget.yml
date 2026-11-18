@@ -1,0 +1,101 @@
+name: NuGet.org / publish verified immutable release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published immutable GitHub Release (e.g., 1.0.1)'
+        required: true
+        type: string
+      confirmation:
+        description: 'Type PUBLISH to authorize upload to NuGet.org'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: publish-nuget-${{ inputs.version }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'PUBLISH'
+    runs-on: ubuntu-latest
+    environment: nuget-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Check published release, tag, attestation and exact asset inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/release-check.ps1 -Version $env:RELEASE_VERSION -Phase Published
+      - name: Download the exact GitHub Release assets (no rebuild)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --dir dist
+      - name: Verify package metadata and SHA-256
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/verify-package.ps1 -Version $env:RELEASE_VERSION -Directory dist
+      - name: Verify both assets against GitHub's release attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="dist/KeePassXC.CloudTransport.${RELEASE_VERSION}.nupkg"
+          gh release verify-asset "$RELEASE_VERSION" "$pkg" --repo "$GITHUB_REPOSITORY"
+          gh release verify-asset "$RELEASE_VERSION" "${pkg}.sha256" --repo "$GITHUB_REPOSITORY"
+      - name: Refuse an existing NuGet.org package version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: pwsh
+        run: ./scripts/check-nuget-version.ps1 -Version $env:RELEASE_VERSION
+      - name: Verify NuGet publisher configuration
+        shell: bash
+        env:
+          NUGET_USERNAME: ${{ vars.NUGET_USERNAME }}
+        run: |
+          if [[ -z "$NUGET_USERNAME" ]]; then
+            echo '::error::Set repository variable NUGET_USERNAME to your NuGet.org username (not email).'
+            exit 1
+          fi
+          echo '[PASS] NuGet publishing username is configured.'
+      - name: NuGet.org Trusted Publishing (OIDC, short-lived credential)
+        id: nuget_login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USERNAME }}
+      - name: Publish exactly one package, without --skip-duplicate
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          pkg="dist/KeePassXC.CloudTransport.${RELEASE_VERSION}.nupkg"
+          dotnet nuget push "$pkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          echo '[PASS] NuGet.org accepted the package upload.'
+      - name: NuGet indexing notice
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          echo "Published KeePassXC.CloudTransport $RELEASE_VERSION to NuGet.org."
+          echo 'NuGet.org search/indexing may take additional time; an accepted upload is not proof of immediate search visibility.'

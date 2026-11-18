@@ -1,0 +1,28 @@
+name: Windows .NET 10 / NativeAOT / NuGet
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build, test, AOT, pack
+        shell: cmd
+        run: build.bat -NoPause
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keepassxc-cloudtransport-nuget-unpublished
+          path: |
+            dist/*.nupkg
+            dist/*.sha256
+          if-no-files-found: error
