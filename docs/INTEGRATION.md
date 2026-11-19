@@ -25,6 +25,31 @@ Each existing repository is modified exclusively by a version-bumped `.patch` ag
 
 Cloud Sync and Card Print must each implement `ICloudSecretStore`, usually via their existing Windows credential management. The host is also responsible for opening a browser and installing/updating Proton CLI. A safe default `ProcessCloudCliRunner` is available if the host has no existing CLI process runner.
 
+### Custom Google OAuth callback pages
+
+A host can pass self-contained, localized HTML for both possible outcomes. The package
+continues to own the loopback listener, PKCE, state checking, credential storage and
+HTTP response. Consumers must not host a second OAuth callback server.
+
+```csharp
+var services = new CloudTransportServices
+{
+    Secrets = mySecretStore,
+    Browser = myBrowserLauncher,
+    GoogleOAuthCallbackPages = new GoogleOAuthCallbackPages(
+        SuccessHtml: successHtml,
+        FailureHtml: failureHtml)
+};
+using var http = new HttpClient();
+await new GoogleOAuthSession(options, services, http).LoginAsync(ct);
+```
+
+Only inline CSS and `data:` images/fonts are permitted on customized pages;
+JavaScript, external assets and network requests are forbidden by CSP. Do not
+embed OAuth codes, tokens, arbitrary user data or URLs into either page.
+Both pages must be non-empty and at most 128 KiB each, measured in UTF-8 bytes.
+When the property is omitted, the original plain HTML remains unchanged.
+
 ## Package distribution
 
 NuGet Package ID currently configured as `KeePassXC.CloudTransport` (working name; confirm availability before publication). The package is a normal `net10.0` library with no external packages and is compatible with self-contained NativeAOT consumers. `dist/` contains packages only after a successful local Windows build.

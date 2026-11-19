@@ -135,13 +135,32 @@ public sealed class GoogleOAuthSession
         }
         return q;
     }
-    private static async Task ReplyAsync(Stream output, bool succeeded)
+    private static void ValidatePage(string html)
     {
-        var body = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"></head><body><p>" +
-            (succeeded ? "Authorization completed. You can close this tab." : "Authorization not completed. Return to the application.") +
-            "</p></body></html>";
+        if (string.IsNullOrWhiteSpace(html) || Encoding.UTF8.GetByteCount(html) > 128 * 1024)
+            throw new CloudSafetyException("Google OAuth callback page must contain 1..131072 UTF-8 bytes.");
+    }
+    private void ValidateCallbackPages()
+    {
+        if (_services.GoogleOAuthCallbackPages is not { } pages) return;
+        // Reject invalid input before starting a login, not after issuing a token.
+        ValidatePage(pages.SuccessHtml);
+        ValidatePage(pages.FailureHtml);
+    }
+    private static async Task ReplyAsync(Stream output, bool succeeded, GoogleOAuthCallbackPages? pages)
+    {
+        var body = pages is null
+            ? "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"></head><body><p>" +
+              (succeeded ? "Authorization completed. You can close this tab." : "Authorization not completed. Return to the application.") +
+              "</p></body></html>"
+            : succeeded ? pages.SuccessHtml : pages.FailureHtml;
         var bytes = Encoding.UTF8.GetBytes(body);
-        var header = $"HTTP/1.1 {(succeeded ? "200 OK" : "400 Bad Request")}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {bytes.Length}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; style-src 'none'; script-src 'none'\r\nConnection: close\r\n\r\n";
+        // A host may brand the result using inline CSS/data artwork, but must not
+        // execute scripts or fetch network resources (which could leak OAuth URLs).
+        var csp = pages is null
+            ? "default-src 'none'; style-src 'none'; script-src 'none'"
+            : "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; script-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+        var header = $"HTTP/1.1 {(succeeded ? "200 OK" : "400 Bad Request")}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {bytes.Length}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: {csp}\r\nConnection: close\r\n\r\n";
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
@@ -154,6 +173,7 @@ public sealed class GoogleOAuthSession
     public async Task<string> LoginAsync(CancellationToken ct)
     {
         if (_services.Browser is null) throw new CloudTransportException("OAUTH_CONFIGURATION", CloudFailureKind.Configuration, "OAuth browser launcher is required");
+        ValidateCallbackPages();
         await _gate.WaitAsync(ct);
         try
         {
@@ -194,7 +214,7 @@ public sealed class GoogleOAuthSession
                 if (!query.TryGetValue("state", out var returned) || returned != state ||
                     !query.TryGetValue("code", out var code) || string.IsNullOrWhiteSpace(code))
                 {
-                    await ReplyAsync(stream, false);
+                    await ReplyAsync(stream, false, _services.GoogleOAuthCallbackPages);
                     throw new CloudSafetyException("Google OAuth callback invalid or authorization denied");
                 }
                 try
@@ -209,10 +229,10 @@ public sealed class GoogleOAuthSession
                     if (string.IsNullOrWhiteSpace(refresh)) throw new CloudSafetyException("Google OAuth did not return offline refresh token");
                     _services.Secrets.Write(Target, ClientId, refresh);
                     StoreAccess(response.RootElement);
-                    await ReplyAsync(stream, true);
+                    await ReplyAsync(stream, true, _services.GoogleOAuthCallbackPages);
                     return account;
                 }
-                catch { await ReplyAsync(stream, false); throw; }
+                catch { await ReplyAsync(stream, false, _services.GoogleOAuthCallbackPages); throw; }
             }
             finally { listener.Stop(); }
         }

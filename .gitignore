@@ -13,3 +13,5 @@ TestResults/
 *.kdbx.key
 *.token
 *.secrets.json
+/*.patch
+/*.zip

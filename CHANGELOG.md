@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.3] - 2026-11-18
+
+- Allow host applications to supply self-contained Google OAuth callback success and failure HTML through `CloudTransportServices.GoogleOAuthCallbackPages`.
+- Restrict custom callback rendering to inline CSS/data resources; reject scripts, remote assets and oversized/empty pages before starting OAuth.
+- Retain the original callback pages for existing clients and add isolated loopback callback tests.
+
 ## [1.0.2] - 2026-11-18
 
 - Fix manual Draft Release validation: GitHub's by-tag REST endpoint only resolves published releases; enumerate authenticated releases for drafts.

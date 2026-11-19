@@ -54,12 +54,21 @@ public interface IProtonLoginLauncher
     Task<bool> StartLoginAsync(string executable, CancellationToken ct);
 }
 
+/// <summary>Optional complete, self-contained HTML pages displayed in the loopback Google OAuth tab.
+/// Supplied by the host at login time. Never include credentials or untrusted content.
+/// Remote scripts, stylesheets and images are blocked by the OAuth callback CSP.</summary>
+public sealed record GoogleOAuthCallbackPages(string SuccessHtml, string FailureHtml);
+
 public sealed record CloudTransportServices
 {
     public required ICloudSecretStore Secrets { get; init; }
     public ICloudBrowserLauncher? Browser { get; init; }
     public ICloudCliRunner? Cli { get; init; }
     public IProtonLoginLauncher? ProtonLogin { get; init; }
+    /// <summary>Optional host-branded Google OAuth result pages. Both are required when set.
+    /// Inlined CSS and data: images/fonts are supported; JavaScript and network assets are blocked.
+    /// Maximum UTF-8 encoded size is 128 KiB per page. Null retains the built-in plain page.</summary>
+    public GoogleOAuthCallbackPages? GoogleOAuthCallbackPages { get; init; }
     /// <summary>Optional events with safe, redacted messages. Never provide secrets.</summary>
     public Action<CloudTransportEvent>? Events { get; init; }
     /// <summary>For deterministic tests; production should leave null.</summary>
