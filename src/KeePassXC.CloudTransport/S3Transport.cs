@@ -16,6 +16,7 @@ public sealed class S3Transport : ICloudTransport, IConditionalCloudTransport
     private readonly Uri _endpoint;
     private readonly HttpClient _http;
     private readonly Action<CloudTransportEvent>? _events;
+    private readonly IProgress<CloudTransferProgress>? _progress;
     public CloudProvider Provider => _provider;
     public CloudCapabilities Capabilities { get; } = new(true, true, true);
 
@@ -23,6 +24,7 @@ public sealed class S3Transport : ICloudTransport, IConditionalCloudTransport
     {
         _provider = options.Provider;
         _events = services.Events;
+        _progress = services.TransferProgress;
         if (_provider is not (CloudProvider.S3 or CloudProvider.CloudflareR2)) throw new ArgumentOutOfRangeException(nameof(options));
         if (!Uri.TryCreate(options.Endpoint, UriKind.Absolute, out var endpoint) ||
             endpoint.Scheme != Uri.UriSchemeHttps || endpoint.UserInfo.Length > 0 ||
@@ -70,7 +72,7 @@ public sealed class S3Transport : ICloudTransport, IConditionalCloudTransport
     private Uri BucketUrl(string query)
         => new(_endpoint.GetLeftPart(UriPartial.Authority) + "/" + Encode(_bucket) + "/?" + query);
     private async Task<HttpRequestMessage> SignAsync(HttpMethod method, Uri url, string? source, CancellationToken ct,
-        string? ifMatch = null, bool ifNoneMatch = false)
+        string? ifMatch = null, bool ifNoneMatch = false, TransferMeter? meter = null)
     {
         var contentHash = Hex(SHA256.HashData(Array.Empty<byte>()));
         if (source is not null)
@@ -106,13 +108,15 @@ public sealed class S3Transport : ICloudTransport, IConditionalCloudTransport
         req.Headers.Authorization = new AuthenticationHeaderValue("AWS4-HMAC-SHA256",
             "Credential=" + _keyId + "/" + scope +
             ", SignedHeaders=" + signedHeaders + ", Signature=" + signature);
-        if (source is not null) req.Content = new StreamContent(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read));
+        if (source is not null) req.Content = meter is null
+            ? new StreamContent(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read))
+            : HttpHelpers.UploadContent(source, meter);
         return req;
     }
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, Uri url, string? source, CancellationToken ct,
-        string? ifMatch = null, bool ifNoneMatch = false)
+        string? ifMatch = null, bool ifNoneMatch = false, TransferMeter? meter = null)
     {
-        using var req = await SignAsync(method, url, source, ct, ifMatch, ifNoneMatch);
+        using var req = await SignAsync(method, url, source, ct, ifMatch, ifNoneMatch, meter);
         return await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
     }
     public async Task<bool> DownloadAsync(string path, string destination, CancellationToken ct)
@@ -121,16 +125,20 @@ public sealed class S3Transport : ICloudTransport, IConditionalCloudTransport
         using var res = await SendAsync(HttpMethod.Get, ObjectUrl(Key(path)), null, ct);
         if (res.StatusCode == HttpStatusCode.NotFound) return false;
         HttpHelpers.Ensure(res, "S3 GET");
-        await HttpHelpers.DownloadToNewFileAsync(res, destination, ct);
+        await HttpHelpers.DownloadToNewFileAsync(res, destination, ct,
+            new TransferMeter(Provider, CloudTransferDirection.Download, _progress));
         _events?.Invoke(new("Download", "S3 download finished"));
         return true;
     }
     public async Task UploadAsync(string source, string path, CloudWriteMode mode, CancellationToken ct)
     {
         _events?.Invoke(new("Upload", "S3 upload started"));
+        var meter = new TransferMeter(Provider, CloudTransferDirection.Upload, _progress);
         using var res = await SendAsync(HttpMethod.Put, ObjectUrl(Key(path)), source, ct,
-            ifNoneMatch: mode == CloudWriteMode.CreateNew);
+            ifNoneMatch: mode == CloudWriteMode.CreateNew, meter: meter);
         HttpHelpers.Ensure(res, "S3 PUT");
+        meter.Confirm();
+        meter.Complete();
         _events?.Invoke(new("Upload", "S3 upload finished"));
     }
     public async Task<CloudObjectInfo?> GetInfoAsync(string path, CancellationToken ct)
@@ -152,9 +160,12 @@ public sealed class S3Transport : ICloudTransport, IConditionalCloudTransport
     }
     public async Task UploadConditionalAsync(string source, string path, string? observedRevision, CancellationToken ct)
     {
+        var meter = new TransferMeter(Provider, CloudTransferDirection.Upload, _progress);
         using var res = await SendAsync(HttpMethod.Put, ObjectUrl(Key(path)), source, ct,
-            observedRevision, ifNoneMatch: observedRevision is null);
+            observedRevision, ifNoneMatch: observedRevision is null, meter: meter);
         HttpHelpers.Ensure(res, "S3 conditional PUT");
+        meter.Confirm();
+        meter.Complete();
     }
     public Task EnsureDirectoryAsync(string directory, CancellationToken ct)
     {

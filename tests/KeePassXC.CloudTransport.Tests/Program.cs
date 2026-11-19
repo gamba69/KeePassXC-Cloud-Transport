@@ -22,6 +22,7 @@ var secrets = new MemorySecrets();
 secrets.Write("dav", "demo", "example_password");
 secrets.Write("s3", "AKIDEXAMPLE", "TEST_ONLY_SECRET");
 await Run("Google / custom OAuth callback pages", GoogleOAuthCallbackPageTests.RunAsync);
+await Run("transfers / byte progress, conditional writes, errors", TransferProgressTests.RunAsync);
 var temp = Path.Combine(Path.GetTempPath(), "cloudtransport-test-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);
 try

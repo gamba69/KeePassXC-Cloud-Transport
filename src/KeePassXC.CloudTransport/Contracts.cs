@@ -71,6 +71,9 @@ public sealed record CloudTransportServices
     public GoogleOAuthCallbackPages? GoogleOAuthCallbackPages { get; init; }
     /// <summary>Optional events with safe, redacted messages. Never provide secrets.</summary>
     public Action<CloudTransportEvent>? Events { get; init; }
+    /// <summary>Per-transfer byte progress (payload only). Called for HTTP transfers and
+    /// Proton CLI completion. Optional; existing consumers are unchanged.</summary>
+    public IProgress<CloudTransferProgress>? TransferProgress { get; init; }
     /// <summary>For deterministic tests; production should leave null.</summary>
     public HttpMessageHandler? HttpHandler { get; init; }
 }

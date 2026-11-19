@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4] - 2026-11-19
+
+- Add opt-in `CloudTransportServices.TransferProgress` with transfer IDs, byte counts, known totals, phase and direction. Rate-limit live notifications without blocking streams.
+- Report real payload bytes for Google Drive, WebDAV, S3 and Cloudflare R2, including conditional uploads. Count HTTP upload stream consumption and download stream writes; server acknowledgement remains a separate phase.
+- Expose Proton CLI phases and confirmed final bytes without inventing live percentages; the official non-TTY `--json` protocol does not publish streaming progress.
+- Preserve existing `Events` and transport methods, including Native AOT compatibility. Add deterministic HTTP progress tests and usage documentation.
+
 ## [1.0.3] - 2026-11-18
 
 - Allow host applications to supply self-contained Google OAuth callback success and failure HTML through `CloudTransportServices.GoogleOAuthCallbackPages`.

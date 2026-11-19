@@ -16,6 +16,7 @@ public sealed class WebDavTransport : ICloudTransport, IConditionalCloudTranspor
     private readonly string _authorization;
     private readonly HttpClient _http;
     private readonly Action<CloudTransportEvent>? _events;
+    private readonly IProgress<CloudTransferProgress>? _progress;
 
     public CloudProvider Provider => CloudProvider.WebDav;
     public CloudCapabilities Capabilities { get; } = new(true, true, true);
@@ -27,6 +28,7 @@ public sealed class WebDavTransport : ICloudTransport, IConditionalCloudTranspor
             throw new CloudTransportException("CONFIGURATION", CloudFailureKind.Configuration, "WebDAV endpoint must be an HTTPS URL without credentials, query or fragment");
         _base = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
         _events = services.Events;
+        _progress = services.TransferProgress;
         _prefix = CloudPath.Normalize(options.RemotePrefix, true);
         var (user, password) = services.Secrets.Read(options.CredentialTarget ?? throw new CloudTransportException(
             "CREDENTIALS_MISSING", CloudFailureKind.Configuration, "WebDAV credential target not configured"));
@@ -82,7 +84,8 @@ public sealed class WebDavTransport : ICloudTransport, IConditionalCloudTranspor
         using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
         if (res.StatusCode == HttpStatusCode.NotFound) return false;
         HttpHelpers.Ensure(res, "WebDAV GET");
-        await HttpHelpers.DownloadToNewFileAsync(res, destination, ct);
+        await HttpHelpers.DownloadToNewFileAsync(res, destination, ct,
+            new TransferMeter(Provider, CloudTransferDirection.Download, _progress));
         _events?.Invoke(new("Download", "WebDAV download finished"));
         return true;
     }
@@ -91,9 +94,12 @@ public sealed class WebDavTransport : ICloudTransport, IConditionalCloudTranspor
         _events?.Invoke(new("Upload", "WebDAV upload started"));
         using var req = Request(HttpMethod.Put, path);
         if (mode == CloudWriteMode.CreateNew) req.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
-        req.Content = new StreamContent(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read));
+        var meter = new TransferMeter(Provider, CloudTransferDirection.Upload, _progress);
+        req.Content = HttpHelpers.UploadContent(source, meter);
         using var res = await _http.SendAsync(req, ct);
         HttpHelpers.Ensure(res, "WebDAV PUT");
+        meter.Confirm();
+        meter.Complete();
         _events?.Invoke(new("Upload", "WebDAV upload finished"));
     }
     public async Task<CloudObjectInfo?> GetInfoAsync(string path, CancellationToken ct)
@@ -123,9 +129,12 @@ public sealed class WebDavTransport : ICloudTransport, IConditionalCloudTranspor
         else if (EntityTagHeaderValue.TryParse(observedRevision, out var tag) && !tag.IsWeak && tag != EntityTagHeaderValue.Any)
             req.Headers.IfMatch.Add(tag);
         else throw new CloudSafetyException("Invalid or weak WebDAV revision token");
-        req.Content = new StreamContent(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read));
+        var meter = new TransferMeter(Provider, CloudTransferDirection.Upload, _progress);
+        req.Content = HttpHelpers.UploadContent(source, meter);
         using var res = await _http.SendAsync(req, ct);
         HttpHelpers.Ensure(res, "WebDAV conditional PUT");
+        meter.Confirm();
+        meter.Complete();
     }
     public async Task EnsureDirectoryAsync(string directory, CancellationToken ct)
     {

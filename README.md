@@ -61,6 +61,33 @@ All paths are **relative to the selected remote prefix**, use `/`, and cannot co
 
 For Google configure `GoogleClientId`, optional publicly embedded Desktop client secret, and `GoogleRefreshTokenTarget`; pass a host browser launcher. Google refresh tokens are owned by the host's `ICloudSecretStore`. For Proton configure `ProtonCliExecutable` and a host login launcher; a safe non-shell CLI runner is included as a default. A host may inject a different `ICloudCliRunner`.
 
+## Byte-transfer progress
+
+The optional `CloudTransportServices.TransferProgress` callback reports the amount of file payload
+read by the HTTP upload stream or written by the download stream, without retaining the file
+in memory. `TotalBytes` is nullable when the server does not provide a length. Each transfer
+has an independent `TransferId` (retries create a new ID), a direction and distinct
+`Preparing`, `Transferring`, `Confirming` and `Completed` phases. Do not treat 100% stream
+consumption as server acknowledgement; only `Completed` confirms success. UI callbacks
+are throttled to approximately 10 Hz.
+
+```csharp
+var progress = new Progress<CloudTransferProgress>(p =>
+{
+    if (p.HasLiveByteProgress && p.TotalBytes is > 0)
+        Console.WriteLine($"{p.Direction}: {p.TransferredBytes}/{p.TotalBytes} bytes");
+    else
+        Console.WriteLine($"{p.Direction}: {p.Phase}");
+});
+var services = new CloudTransportServices { Secrets = secrets, TransferProgress = progress };
+```
+
+Google Drive, WebDAV, S3 and R2 report live bytes for upload/download (including
+conditional uploads). The official Proton CLI reports actual transfer bytes to
+`--json` only after completion; its live progress is TTY-only. Proton therefore
+sets `HasLiveByteProgress=false`, reports phases and confirmed final bytes only;
+no fabricated percentages or unstable console-output parsing.
+
 ## Conditional writes
 
 For cloud APIs with known conditional writes:
@@ -85,7 +112,7 @@ build.bat -NoPause
 build.bat -NoPause -ValidateOnly
 ```
 
-The default build performs mandatory source validation, .NET restore, compilation, named tests, Windows NativeAOT smoke and `dotnet pack`. Output: `dist/KeePassXC.CloudTransport.1.0.2.nupkg` and a matching SHA-256 sidecar. This is not automatically uploaded to nuget.org. The `-SkipAot` developer switch is available for intermediate local experiments; such a build is **not** qualified for release.
+The default build performs mandatory source validation, .NET restore, compilation, named tests, Windows NativeAOT smoke and `dotnet pack`. Output: `dist/KeePassXC.CloudTransport.1.0.4.nupkg` and a matching SHA-256 sidecar. This is not automatically uploaded to nuget.org. The `-SkipAot` developer switch is available for intermediate local experiments; such a build is **not** qualified for release.
 
 The source package requires **no third-party NuGet dependencies**. GitHub Actions runs the same build on `windows-latest`, and saves an unpublished package for each successful CI run. Neither pushes nor Git tags publish a release automatically. See [Releasing](docs/RELEASING.md) for the separate manual GitHub Release and NuGet.org Trusted Publishing workflows (no stored NuGet API key).
 

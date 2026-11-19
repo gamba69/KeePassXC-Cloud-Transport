@@ -43,11 +43,26 @@ internal static class HttpHelpers
         buffered.Position = 0;
         return await JsonDocument.ParseAsync(buffered, new JsonDocumentOptions { MaxDepth = 32 }, ct);
     }
-    internal static async Task DownloadToNewFileAsync(HttpResponseMessage response, string destination, CancellationToken ct)
+    internal static StreamContent UploadContent(string source, TransferMeter meter)
+        => new(new MeteredReadStream(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read), meter));
+
+    internal static async Task DownloadToNewFileAsync(HttpResponseMessage response, string destination,
+        CancellationToken ct, TransferMeter? meter = null)
     {
+        meter?.Begin(response.Content.Headers.ContentLength);
         await using var input = await response.Content.ReadAsStreamAsync(ct);
         await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        await input.CopyToAsync(output, ct);
+        var buffer = new byte[64 * 1024];
+        int n;
+        while ((n = await input.ReadAsync(buffer.AsMemory(), ct)) != 0)
+        {
+            await output.WriteAsync(buffer.AsMemory(0, n), ct);
+            meter?.Add(n);
+        }
         await output.FlushAsync(ct);
+        if (response.Content.Headers.ContentLength is long expected && output.Length != expected)
+            throw new IOException("Downloaded payload differs from declared Content-Length");
+        meter?.Confirm();
+        meter?.Complete();
     }
 }

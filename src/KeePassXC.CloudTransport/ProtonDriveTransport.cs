@@ -12,6 +12,7 @@ public sealed class ProtonDriveTransport : ICloudTransport, ICloudAuthentication
     private readonly ICloudCliRunner _runner;
     private readonly IProtonLoginLauncher? _login;
     private readonly Action<CloudTransportEvent>? _events;
+    private readonly IProgress<CloudTransferProgress>? _progress;
     private readonly IDisposable _usage;
     private readonly FileStream _binaryLease;
     public CloudProvider Provider => CloudProvider.ProtonDrive;
@@ -29,6 +30,7 @@ public sealed class ProtonDriveTransport : ICloudTransport, ICloudAuthentication
         _runner = services.Cli ?? new ProcessCloudCliRunner();
         _login = services.ProtonLogin;
         _events = services.Events;
+        _progress = services.TransferProgress;
         _usage = ProtonCliLease.BeginUse();
         try
         {
@@ -137,12 +139,22 @@ public sealed class ProtonDriveTransport : ICloudTransport, ICloudAuthentication
         if (!await ExistsAsync(remote, false, ct)) return false;
         var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cloudtransport-proton-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
+        var meter = new TransferMeter(Provider, CloudTransferDirection.Download, _progress, live: false);
         try
         {
-            await RunAsync(ct, "filesystem", "download", remote, folder, "--json", "--file-conflict-strategy", "skip");
+            meter.Begin(null); // Official CLI --json has no live progress; do not simulate it.
+            var output = await RunAsync(ct, "filesystem", "download", remote, folder, "--json", "--file-conflict-strategy", "skip");
+            using var report = JsonDocument.Parse(output);
+            var result = report.RootElement;
+            if (result.ValueKind != JsonValueKind.Object ||
+                !result.TryGetProperty("failedItems", out var failures) || failures.GetInt32() != 0 ||
+                !result.TryGetProperty("transferredItems", out var count) || count.GetInt32() != 1)
+                throw new CloudSafetyException("Proton CLI did not confirm download");
             var actual = System.IO.Path.Combine(folder, CloudPath.Normalize(path).Split('/')[^1]);
             if (!File.Exists(actual)) throw new CloudSafetyException("Proton CLI did not produce downloaded file");
+            var length = new FileInfo(actual).Length;
             File.Move(actual, destination); // Move only completed temporary file.
+            meter.CompleteFromCli(length);
             _events?.Invoke(new("Download", "Proton Drive download finished"));
             return true;
         }
@@ -166,6 +178,8 @@ public sealed class ProtonDriveTransport : ICloudTransport, ICloudAuthentication
         {
             var staged = System.IO.Path.Combine(temp, filename);
             File.Copy(source, staged, false);
+            var meter = new TransferMeter(Provider, CloudTransferDirection.Upload, _progress, live: false);
+            meter.Begin(new FileInfo(staged).Length);
             var strategy = mode == CloudWriteMode.Replace ? "create-new-revision" : "skip";
             var output = await RunAsync(ct, "filesystem", "upload", staged, parent, "--json", "--file-conflict-strategy", strategy, "--skip-thumbnails");
             using var report = JsonDocument.Parse(output);
@@ -175,6 +189,9 @@ public sealed class ProtonDriveTransport : ICloudTransport, ICloudAuthentication
                 !root.TryGetProperty("transferredItems", out var transferred) ||
                 (mode == CloudWriteMode.CreateNew && transferred.GetInt32() != 1))
                 throw new CloudSafetyException("Proton transfer was not confirmed");
+            var sentBytes = root.TryGetProperty("transferredBytes", out var sent) && sent.TryGetInt64(out var amount)
+                ? amount : (transferred.GetInt32() == 1 ? new FileInfo(staged).Length : 0L);
+            meter.CompleteFromCli(sentBytes, skipped: transferred.GetInt32() == 0);
             _events?.Invoke(new("Upload", "Proton Drive upload finished"));
         }
         finally { try { Directory.Delete(temp, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }

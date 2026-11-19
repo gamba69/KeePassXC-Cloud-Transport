@@ -18,6 +18,7 @@ public sealed class GoogleDriveTransport : ICloudTransport, ICloudAuthentication
     private readonly HttpClient _http;
     private readonly GoogleOAuthSession _oauth;
     private readonly Action<CloudTransportEvent>? _events;
+    private readonly IProgress<CloudTransferProgress>? _progress;
     private readonly ConcurrentDictionary<string, (string Id, DateTimeOffset Checked)> _folders = new(StringComparer.Ordinal);
     public CloudProvider Provider => CloudProvider.GoogleDrive;
     public CloudCapabilities Capabilities { get; } = new(false, false, false);
@@ -27,6 +28,7 @@ public sealed class GoogleDriveTransport : ICloudTransport, ICloudAuthentication
             throw new CloudTransportException("OAUTH_CONFIGURATION", CloudFailureKind.Configuration, "Google OAuth client and refresh-token target are required");
         _prefix = CloudPath.Normalize(options.RemotePrefix, true);
         _events = services.Events;
+        _progress = services.TransferProgress;
         _cacheSeconds = Math.Clamp(options.GoogleFolderCacheSeconds, 0, 60);
         _http = HttpHelpers.NewClient(options, services);
         _oauth = new GoogleOAuthSession(options, services, _http);
@@ -165,7 +167,8 @@ public sealed class GoogleDriveTransport : ICloudTransport, ICloudAuthentication
         if (response.StatusCode == HttpStatusCode.NotFound)
             throw new CloudSafetyException("Google Drive object changed during download");
         HttpHelpers.Ensure(response, "Google Drive download");
-        await HttpHelpers.DownloadToNewFileAsync(response, destination, ct);
+        await HttpHelpers.DownloadToNewFileAsync(response, destination, ct,
+            new TransferMeter(Provider, CloudTransferDirection.Download, _progress));
         _events?.Invoke(new("Download", "Google Drive download finished"));
         return true;
     }
@@ -180,12 +183,13 @@ public sealed class GoogleDriveTransport : ICloudTransport, ICloudAuthentication
         var existing = await OneAsync(parent, name, ct);
         if (mode == CloudWriteMode.CreateNew && existing is not null)
             throw new CloudTransportException("CONCURRENT_WRITE", CloudFailureKind.ConcurrentWrite, "Google Drive object already exists");
+        var meter = new TransferMeter(Provider, CloudTransferDirection.Upload, _progress);
         if (existing is not null)
         {
             if (existing.Mime == FolderMime) throw new CloudSafetyException("Cannot overwrite Google Drive directory");
             using var req = new HttpRequestMessage(new HttpMethod("PATCH"),
                 UploadApi + "/" + UrlEncode(existing.Id) + "?uploadType=media");
-            req.Content = new StreamContent(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read));
+            req.Content = HttpHelpers.UploadContent(source, meter);
             req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
             using var res = await SendAsync(req, ct);
             HttpHelpers.Ensure(res, "Google Drive update");
@@ -197,7 +201,7 @@ public sealed class GoogleDriveTransport : ICloudTransport, ICloudAuthentication
             using var req = new HttpRequestMessage(HttpMethod.Post, UploadApi + "?uploadType=multipart&fields=id");
             var content = new MultipartContent("related");
             content.Add(new StringContent(metadata, Encoding.UTF8, "application/json"));
-            var body = new StreamContent(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read));
+            var body = HttpHelpers.UploadContent(source, meter);
             body.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
             content.Add(body);
             req.Content = content;
@@ -211,6 +215,8 @@ public sealed class GoogleDriveTransport : ICloudTransport, ICloudAuthentication
         // A simultaneous create may have yielded duplicate names. This is not an atomic CreateNew.
         var verified = await OneAsync(parent, name, ct);
         if (verified is null) throw new CloudSafetyException("Google Drive upload not visible after completion");
+        meter.Confirm();
+        meter.Complete();
         _events?.Invoke(new("Upload", "Google Drive upload finished"));
     }
     public async Task EnsureDirectoryAsync(string directory, CancellationToken ct)
